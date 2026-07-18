@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '@/lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc, query, orderBy, onSnapshot, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { 
   Heart, Calendar, MapPin, Phone, MessageSquare, Copy, 
@@ -21,6 +21,8 @@ interface PersonDetail {
   name: string;
   phone: string;
   relation: string;
+  nickname: string;        // ← 추가
+  nicknameColor: string;   // ← 추가
   father: string;
   fatherPhone: string;
   fatherBank: string;
@@ -69,6 +71,7 @@ interface WeddingData {
     groomProfile: string;
     brideProfile: string;
     gallery: string[];
+    countdown: string;
   };
   video: {
     youtubeUrl: string;
@@ -76,6 +79,12 @@ interface WeddingData {
   audio: {
     bgmUrl: string;
   };
+}
+
+interface GuestbookEntry {
+  id: string;
+  name: string;
+  message: string;
 }
 
 const WEDDING_DOC_ID = "main"; // Firestore weddingInvites 컬렉션의 문서 ID
@@ -98,12 +107,15 @@ const DEFAULT_WEDDING_DATA: WeddingData = {
     { id: 'gallery', name: '세로 감성 갤러리', visible: true },
     { id: 'video', name: '스페셜 무비', visible: true },
     { id: 'accounts', name: '마음 전하실 곳', visible: true },
+    { id: 'guestbook', name: '방명록', visible: true },
     { id: 'ending', name: '엔딩 감사글', visible: true }
   ],
   groom: {
     name: "한민우",
     phone: "010-1234-5678",
     relation: "장남",
+    nickname: "결아바라기",
+    nicknameColor: "#6C7BC4",   // 블루 계열
     father: "한정식",
     fatherPhone: "010-9876-5432",
     fatherBank: "신한은행",
@@ -122,6 +134,8 @@ const DEFAULT_WEDDING_DATA: WeddingData = {
     name: "서예진",
     phone: "010-5678-1234",
     relation: "장녀",
+    nickname: "결아바라기",
+    nicknameColor: "#E67E80",   // 핑크 계열
     father: "서태웅",
     fatherPhone: "010-1111-2222",
     fatherBank: "우리은행",
@@ -153,6 +167,7 @@ const DEFAULT_WEDDING_DATA: WeddingData = {
     ending: "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&q=80&w=800",
     groomProfile: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=300",
     brideProfile: "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&q=80&w=300",
+    countdown: "",
     gallery: [
       "https://images.unsplash.com/photo-1583939003579-730e3918a45a?auto=format&fit=crop&q=80&w=600",
       "https://images.unsplash.com/photo-1519225495810-7512c696505a?auto=format&fit=crop&q=80&w=600",
@@ -187,6 +202,70 @@ function formatKoreanTime(dateStr: string) {
   return `${period} ${hour}:${minute}`;
 }
 
+function getCalendarDateStrings(dateStr: string) {
+  const start = new Date(dateStr);
+  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000); // 예식 2시간 소요로 가정
+
+  // UTC 기준 YYYYMMDDTHHMMSSZ 포맷 (한국시간 -9시간)
+  const toUTCString = (d: Date) => {
+    const utc = new Date(d.getTime() - 9 * 60 * 60 * 1000);
+    return utc.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+
+  return {
+    startUTC: toUTCString(start),
+    endUTC: toUTCString(end),
+    startLocal: `${start.getFullYear()}${String(start.getMonth() + 1).padStart(2, '0')}${String(start.getDate()).padStart(2, '0')}T${String(start.getHours()).padStart(2, '0')}${String(start.getMinutes()).padStart(2, '0')}00`,
+    endLocal: `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, '0')}${String(end.getDate()).padStart(2, '0')}T${String(end.getHours()).padStart(2, '0')}${String(end.getMinutes()).padStart(2, '0')}00`,
+  };
+}
+
+function getGoogleCalendarUrl(data: WeddingData) {
+  const { startUTC, endUTC } = getCalendarDateStrings(data.date);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: `${data.groom.name} ♥ ${data.bride.name} 결혼식`,
+    dates: `${startUTC}/${endUTC}`,
+    location: data.location.address,
+    details: `${data.location.venue}에서 열리는 결혼식입니다.`,
+  });
+  return `https://www.google.com/calendar/render?${params.toString()}`;
+}
+
+function getNaverCalendarUrl(data: WeddingData) {
+  const { startLocal, endLocal } = getCalendarDateStrings(data.date);
+  const params = new URLSearchParams({
+    title: `${data.groom.name} ♥ ${data.bride.name} 결혼식`,
+    startTime: startLocal,
+    endTime: endLocal,
+    location: data.location.address,
+  });
+  return `https://calendar.naver.com/quick/new?${params.toString()}`;
+}
+
+function downloadICSFile(data: WeddingData) {
+  const { startUTC, endUTC } = getCalendarDateStrings(data.date);
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'BEGIN:VEVENT',
+    `SUMMARY:${data.groom.name} ♥ ${data.bride.name} 결혼식`,
+    `DTSTART:${startUTC}`,
+    `DTEND:${endUTC}`,
+    `LOCATION:${data.location.address}`,
+    `DESCRIPTION:${data.location.venue}에서 열리는 결혼식입니다.`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'wedding-invite.ics';
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 function FallingParticles({ type }: { type: WeddingTheme['fallingEffect'] }) {
   const [particles, setParticles] = useState<{ id: number; left: number; delay: number; duration: number; size: number }[]>([]);
@@ -311,7 +390,12 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState(''); 
   const [toast, setToast] = useState<string | null>(null);
-  
+  const [guestbookEntries, setGuestbookEntries] = useState<GuestbookEntry[]>([]);
+  const [guestbookName, setGuestbookName] = useState('');
+  const [guestbookMessage, setGuestbookMessage] = useState('');
+  const [guestbookSubmitting, setGuestbookSubmitting] = useState(false);
+  const [calendarMenuOpen, setCalendarMenuOpen] = useState(false);
+
   // Custom styling controls
   const [themePanelOpen, setThemePanelOpen] = useState(false);
   const [reorderPanelOpen, setReorderPanelOpen] = useState(false);
@@ -355,7 +439,12 @@ export default function App() {
             video: { ...DEFAULT_WEDDING_DATA.video, ...(remote.video || {}) },
             audio: { ...DEFAULT_WEDDING_DATA.audio, ...(remote.audio || {}) },
             adminPassword: remote.adminPassword || DEFAULT_WEDDING_DATA.adminPassword,
-            sections: remote.sections?.length ? remote.sections : DEFAULT_WEDDING_DATA.sections,
+            sections: (() => {
+              const savedSections = remote.sections?.length ? remote.sections : DEFAULT_WEDDING_DATA.sections;
+              const savedIds = new Set(savedSections.map((s: SectionConfig) => s.id));
+              const missingSections = DEFAULT_WEDDING_DATA.sections.filter(s => !savedIds.has(s.id));
+              return [...savedSections, ...missingSections];
+            })(),
           };
           setData(merged);
         }
@@ -368,6 +457,22 @@ export default function App() {
     };
     loadData();
   }, []);
+
+ useEffect(() => {
+   const q = query(collection(db, "weddingInvites", WEDDING_DOC_ID, "guestbook"), orderBy("createdAt", "desc"));
+   const unsubscribe = onSnapshot(q, (snapshot) => {
+     const entries = snapshot.docs.map(d => ({
+       id: d.id,
+       name: d.data().name || '',
+       message: d.data().message || '',
+     }));
+     setGuestbookEntries(entries);
+   }, (err) => {
+     console.error("방명록 구독 에러", err);
+   });
+   return () => unsubscribe();
+ }, []);
+
 
   // Time Countdown Logic
   useEffect(() => {
@@ -550,6 +655,38 @@ export default function App() {
       setIsSaving(false);
     }
   };
+ const submitGuestbookEntry = async () => {
+   if (!guestbookName.trim() || !guestbookMessage.trim()) {
+     showToast("이름과 메시지를 모두 입력해주세요.");
+     return;
+   }
+   setGuestbookSubmitting(true);
+   try {
+     await addDoc(collection(db, "weddingInvites", WEDDING_DOC_ID, "guestbook"), {
+       name: guestbookName.trim(),
+       message: guestbookMessage.trim(),
+       createdAt: serverTimestamp(),
+     });
+     setGuestbookName('');
+     setGuestbookMessage('');
+     showToast("따뜻한 축하 메시지가 등록되었습니다 💌");
+   } catch (err) {
+     console.error("방명록 작성 에러", err);
+     showToast("등록에 실패했습니다. 다시 시도해주세요.");
+   } finally {
+     setGuestbookSubmitting(false);
+   }
+ };
+
+ const deleteGuestbookEntry = async (id: string) => {
+   try {
+     await deleteDoc(doc(db, "weddingInvites", WEDDING_DOC_ID, "guestbook", id));
+     showToast("메시지를 삭제했습니다.");
+   } catch (err) {
+     console.error("방명록 삭제 에러", err);
+     showToast("삭제에 실패했습니다.");
+   }
+ };
 
   // Add/Remove dynamic gallery items
   const removeGalleryImage = (idx: number) => {
@@ -968,29 +1105,58 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Real-time Countdown Counter in Invitation */}
-                <div className="bg-[#FAF6F2]/80 py-6 px-4 rounded-3xl border border-[#ECE5DD] space-y-3.5 max-w-sm mx-auto font-sans">
-                  <p className="text-[9px] uppercase tracking-widest text-[#9A7D6F] font-bold">Wedding Day Countdown</p>
-                  <div className="grid grid-cols-4 gap-1.5 text-center max-w-[280px] mx-auto">
-                    <div className="bg-white py-2 rounded-xl shadow-xs">
-                      <span className="block text-base font-semibold text-[#C5A059]">{timeLeft.days}</span>
-                      <span className="text-[8px] text-stone-400">Days</span>
+                {/* Real-time Countdown with Photo Overlay */}
+                <div className="max-w-sm mx-auto">
+                  <div className="relative rounded-3xl overflow-hidden shadow-sm border border-[#ECE5DD] aspect-[4/5] bg-[#FAF6F2]">
+                    {data.images.countdown ? (
+                      <img 
+                        src={data.images.countdown} 
+                        alt="Countdown Photo" 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[#C5A059]/50 text-xs font-sans">
+                        사진을 업로드해 주세요
+                      </div>
+                    )}
+                
+                    {/* 하단 그라데이션 + 텍스트 오버레이 */}
+                    <div className="absolute inset-x-0 bottom-0 pt-16 pb-6 px-4 bg-gradient-to-t from-black/70 via-black/30 to-transparent text-center">
+                      <p className="font-serif text-4xl font-bold text-white drop-shadow-sm">
+                        D-{timeLeft.days}
+                      </p>
+                      <p className="text-xs text-white/90 font-sans mt-1 tracking-wide">
+                        {new Date(data.date).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })}
+                      </p>
                     </div>
-                    <div className="bg-white py-2 rounded-xl shadow-xs">
-                      <span className="block text-base font-semibold text-[#C5A059]">{timeLeft.hours}</span>
-                      <span className="text-[8px] text-stone-400">Hours</span>
-                    </div>
-                    <div className="bg-white py-2 rounded-xl shadow-xs">
-                      <span className="block text-base font-semibold text-[#C5A059]">{timeLeft.minutes}</span>
-                      <span className="text-[8px] text-stone-400">Mins</span>
-                    </div>
-                    <div className="bg-white py-2 rounded-xl shadow-xs">
-                      <span className="block text-base font-semibold text-[#C5A059]">{timeLeft.seconds}</span>
-                      <span className="text-[8px] text-stone-400">Secs</span>
-                    </div>
+                
+                    {editMode && (
+                      <label className="absolute top-3 right-3 bg-white/90 hover:bg-white text-pink-600 text-[10px] px-2.5 py-1.5 rounded-full font-sans font-semibold cursor-pointer shadow-md">
+                        📷 사진 변경
+                       <input 
+                          type="file" 
+                          accept="image/*" 
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            showToast("사진을 업로드하는 중입니다...");
+                            try {
+                              const url = await uploadImageAndGetURL(file, 'countdown');
+                              handleDataChange('images.countdown', url);
+                              showToast("카운트다운 사진이 교체되었습니다! 📸");
+                            } catch (err) {
+                              console.error("업로드 에러", err);
+                              showToast("업로드에 실패했습니다. 다시 시도해주세요.");
+                            }
+                          }} 
+                          className="hidden"
+                        />
+                      </label>
+                    )}
                   </div>
-                  <p className="text-[11px] text-stone-500 font-serif">
-                    행복한 예식날까지 <strong className="text-pink-400">{timeLeft.days}일</strong> 남았습니다.
+                
+                  <p className="text-center text-xs text-stone-500 font-sans mt-3">
+                    행복한 예식날까지 <strong className="text-pink-400">{timeLeft.days}일 {timeLeft.hours}시간</strong> 남았습니다.
                   </p>
                 </div>
               </section>
@@ -1010,43 +1176,43 @@ export default function App() {
                   <p className="text-[10px] text-stone-400 tracking-wider">가장 아름다운 약속을 맺은 사람들을 소개합니다</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-6">
-                  {/* Groom Frame */}
-                  <div className="space-y-3.5 text-center">
-                    <div className="aspect-square rounded-full overflow-hidden border-2 border-white shadow-md mx-auto max-w-[120px] relative">
+                <div className="grid grid-cols-2 gap-3 px-1">
+                  {/* Groom Card */}
+                  <div className="space-y-3 text-center">
+                    <div className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-sm border border-stone-100">
                       <img 
                         src={data.images.groomProfile} 
                         alt="Groom Profile" 
                         className="w-full h-full object-cover"
                       />
+                      {editMode && (
+                        <label className="absolute top-2 right-2 bg-white/90 hover:bg-white text-pink-600 text-[9px] px-2 py-1 rounded-full font-sans font-semibold cursor-pointer shadow-md">
+                          📷 변경
+                          <input type="file" accept="image/*" onChange={(e) => triggerImageUpload('images.groomProfile', e)} className="hidden" />
+                        </label>
+                      )}
                     </div>
-                    
-                    {editMode && (
-                      <div className="bg-white p-2 rounded-xl border border-stone-200 space-y-1 text-left text-[9px] font-sans">
-                        <span className="font-bold text-stone-500 block">🤵 신랑 사진</span>
-                        <input type="file" accept="image/*" onChange={(e) => triggerImageUpload('images.groomProfile', e)} className="w-full" />
-                      </div>
-                    )}
-
+                
                     <div className="space-y-1">
-                      <p className="text-xs text-[#9A7D6F] font-serif font-medium">
-                        {editMode ? (
-                          <input type="text" value={data.groom.relation} onChange={(e) => handleDataChange('groom.relation', e.target.value)} className="w-full border rounded text-center text-xs p-0.5" />
-                        ) : (
-                          data.groom.relation
-                        )}
+                      <p className="text-sm font-semibold text-stone-800 flex items-center justify-center gap-1.5">
+                        신랑 {editMode ? (
+                          <input type="text" value={data.groom.name} onChange={(e) => handleDataChange('groom.name', e.target.value)} className="w-16 border rounded text-xs p-0.5 text-center" />
+                        ) : data.groom.name}
+                        <a href={`tel:${data.groom.phone}`} className="text-[#9A7D6F]"><Phone size={11} /></a>
                       </p>
-                      <h4 className="text-base font-semibold text-stone-800">
+                
+                      {editMode ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <input type="text" value={data.groom.nickname ?? ''} onChange={(e) => handleDataChange('groom.nickname', e.target.value)} placeholder="별명 입력" className="w-20 border rounded text-xs p-0.5 text-center" />
+                          <input type="color" value={data.groom.nicknameColor || '#6C7BC4'} onChange={(e) => handleDataChange('groom.nicknameColor', e.target.value)} className="w-6 h-6 rounded border cursor-pointer p-0" />
+                        </div>
+                      ) : (
+                        data.groom.nickname && <p className="text-sm font-semibold" style={{ color: data.groom.nicknameColor || '#6C7BC4' }}>{data.groom.nickname}</p>
+                      )}
+                
+                      <div className="text-[10px] text-stone-400">
                         {editMode ? (
-                          <input type="text" value={data.groom.name} onChange={(e) => handleDataChange('groom.name', e.target.value)} className="w-full border rounded text-xs p-0.5 text-center" />
-                        ) : (
-                          data.groom.name
-                        )}
-                      </h4>
-                      
-                      <div className="text-[10px] text-stone-500 space-y-0.5">
-                        {editMode ? (
-                          <div className="space-y-1 font-sans">
+                          <div className="space-y-1 font-sans mt-1">
                             <input type="text" value={data.groom.father} onChange={(e) => handleDataChange('groom.father', e.target.value)} className="w-full border rounded text-[9px] p-0.5 text-center" placeholder="부친 이름" />
                             <input type="text" value={data.groom.mother} onChange={(e) => handleDataChange('groom.mother', e.target.value)} className="w-full border rounded text-[9px] p-0.5 text-center" placeholder="모친 이름" />
                           </div>
@@ -1055,53 +1221,44 @@ export default function App() {
                         )}
                       </div>
                     </div>
-
-                    <div className="flex justify-center gap-2">
-                      <a href={`tel:${data.groom.phone}`} className="p-2 bg-white rounded-full text-[#9A7D6F] hover:bg-pink-50 transition border border-stone-200/50 shadow-xs">
-                        <Phone size={13} />
-                      </a>
-                      <a href={`sms:${data.groom.phone}`} className="p-2 bg-white rounded-full text-[#9A7D6F] hover:bg-pink-50 transition border border-stone-200/50 shadow-xs">
-                        <MessageSquare size={13} />
-                      </a>
-                    </div>
                   </div>
-
-                  {/* Bride Frame */}
-                  <div className="space-y-3.5 text-center">
-                    <div className="aspect-square rounded-full overflow-hidden border-2 border-white shadow-md mx-auto max-w-[120px] relative">
+                
+                  {/* Bride Card */}
+                  <div className="space-y-3 text-center">
+                    <div className="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-sm border border-stone-100">
                       <img 
                         src={data.images.brideProfile} 
                         alt="Bride Profile" 
                         className="w-full h-full object-cover"
                       />
+                      {editMode && (
+                        <label className="absolute top-2 right-2 bg-white/90 hover:bg-white text-pink-600 text-[9px] px-2 py-1 rounded-full font-sans font-semibold cursor-pointer shadow-md">
+                          📷 변경
+                          <input type="file" accept="image/*" onChange={(e) => triggerImageUpload('images.brideProfile', e)} className="hidden" />
+                        </label>
+                      )}
                     </div>
-
-                    {editMode && (
-                      <div className="bg-white p-2 rounded-xl border border-stone-200 space-y-1 text-left text-[9px] font-sans">
-                        <span className="font-bold text-stone-500 block">👰 신부 사진</span>
-                        <input type="file" accept="image/*" onChange={(e) => triggerImageUpload('images.brideProfile', e)} className="w-full" />
-                      </div>
-                    )}
-
+                
                     <div className="space-y-1">
-                      <p className="text-xs text-[#9A7D6F] font-serif font-medium">
-                        {editMode ? (
-                          <input type="text" value={data.bride.relation} onChange={(e) => handleDataChange('bride.relation', e.target.value)} className="w-full border rounded text-center text-xs p-0.5" />
-                        ) : (
-                          data.bride.relation
-                        )}
+                      <p className="text-sm font-semibold text-stone-800 flex items-center justify-center gap-1.5">
+                        신부 {editMode ? (
+                          <input type="text" value={data.bride.name} onChange={(e) => handleDataChange('bride.name', e.target.value)} className="w-16 border rounded text-xs p-0.5 text-center" />
+                        ) : data.bride.name}
+                        <a href={`tel:${data.bride.phone}`} className="text-[#9A7D6F]"><Phone size={11} /></a>
                       </p>
-                      <h4 className="text-base font-semibold text-stone-800">
+                
+                      {editMode ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <input type="text" value={data.bride.nickname ?? ''} onChange={(e) => handleDataChange('bride.nickname', e.target.value)} placeholder="별명 입력" className="w-20 border rounded text-xs p-0.5 text-center" />
+                          <input type="color" value={data.bride.nicknameColor || '#C9A063'} onChange={(e) => handleDataChange('bride.nicknameColor', e.target.value)} className="w-6 h-6 rounded border cursor-pointer p-0" />
+                        </div>
+                      ) : (
+                        data.bride.nickname && <p className="text-sm font-semibold" style={{ color: data.bride.nicknameColor || '#C9A063' }}>{data.bride.nickname}</p>
+                      )}
+                
+                      <div className="text-[10px] text-stone-400">
                         {editMode ? (
-                          <input type="text" value={data.bride.name} onChange={(e) => handleDataChange('bride.name', e.target.value)} className="w-full border rounded text-xs p-0.5 text-center" />
-                        ) : (
-                          data.bride.name
-                        )}
-                      </h4>
-                      
-                      <div className="text-[10px] text-stone-500 space-y-0.5">
-                        {editMode ? (
-                          <div className="space-y-1 font-sans">
+                          <div className="space-y-1 font-sans mt-1">
                             <input type="text" value={data.bride.father} onChange={(e) => handleDataChange('bride.father', e.target.value)} className="w-full border rounded text-[9px] p-0.5 text-center" placeholder="부친 이름" />
                             <input type="text" value={data.bride.mother} onChange={(e) => handleDataChange('bride.mother', e.target.value)} className="w-full border rounded text-[9px] p-0.5 text-center" placeholder="모친 이름" />
                           </div>
@@ -1109,15 +1266,6 @@ export default function App() {
                           <p>{data.bride.father} · {data.bride.mother}의 딸</p>
                         )}
                       </div>
-                    </div>
-
-                    <div className="flex justify-center gap-2">
-                      <a href={`tel:${data.bride.phone}`} className="p-2 bg-white rounded-full text-[#9A7D6F] hover:bg-pink-50 transition border border-stone-200/50 shadow-xs">
-                        <Phone size={13} />
-                      </a>
-                      <a href={`sms:${data.bride.phone}`} className="p-2 bg-white rounded-full text-[#9A7D6F] hover:bg-pink-50 transition border border-stone-200/50 shadow-xs">
-                        <MessageSquare size={13} />
-                      </a>
                     </div>
                   </div>
                 </div>
@@ -1182,7 +1330,66 @@ export default function App() {
                     <p className="text-xs font-semibold text-[#C5A059]">{data.location.venue}</p>
                   )}
                 </div>
+                
+                <style>{`
+                  @keyframes glowPulse {
+                    0%, 100% { box-shadow: 0 0 0 0 rgba(197, 160, 89, 0.5); }
+                    50% { box-shadow: 0 0 0 8px rgba(197, 160, 89, 0); }
+                  }
+                  .animate-glow {
+                    animation: glowPulse 1.8s ease-out infinite;
+                  }
+                  @keyframes pointBounce {
+                    0%, 100% { transform: translateY(0); }
+                    50% { transform: translateY(-6px); }
+                  }
+                  .animate-point {
+                    animation: pointBounce 1.2s ease-in-out infinite;
+                  }
+                `}</style>
 
+                
+                <div className="relative flex justify-center pt-2">
+                  <span className="absolute -top-1 text-lg animate-point">👆</span>
+                  
+                  <button 
+                    onClick={() => setCalendarMenuOpen(!calendarMenuOpen)}
+                    className="animate-glow flex items-center gap-1.5 px-5 py-2.5 bg-white border border-[#C5A059] rounded-full text-xs font-semibold text-[#9A7D6F] shadow-sm hover:bg-[#FAF6F2] transition font-sans"
+                  >
+                    <Calendar size={13} />
+                    <span>캘린더에 추가</span>
+                  </button>
+                
+                  {calendarMenuOpen && (
+                    <div className="absolute top-11 z-20 bg-white rounded-2xl border border-stone-200 shadow-lg overflow-hidden text-xs font-sans min-w-[180px]">
+                      <a 
+                        href={getGoogleCalendarUrl(data)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        onClick={() => setCalendarMenuOpen(false)}
+                        className="block px-4 py-3 hover:bg-[#FAF6F2] text-stone-600 border-b border-stone-100"
+                      >
+                        Google 캘린더
+                      </a>
+                      <a 
+                        href={getNaverCalendarUrl(data)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        onClick={() => setCalendarMenuOpen(false)}
+                        className="block px-4 py-3 hover:bg-[#FAF6F2] text-stone-600 border-b border-stone-100"
+                      >
+                        네이버 캘린더
+                      </a>
+                      <button 
+                        onClick={() => { downloadICSFile(data); setCalendarMenuOpen(false); }}
+                        className="block w-full text-left px-4 py-3 hover:bg-[#FAF6F2] text-stone-600"
+                      >
+                        iPhone / Outlook (파일 다운로드)
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
                 {/* Google Map Embedded iframe using dynamic address mapping */}
                 <div className="rounded-3xl overflow-hidden shadow-sm border border-[#EBE3DA] h-52 relative bg-stone-100">
                   <iframe 
@@ -1410,31 +1617,6 @@ export default function App() {
                           </button>
                         </div>
 
-                        <div className="pt-2.5 border-t border-dashed border-stone-100 flex justify-between items-center">
-                          <div>
-                            <p className="font-semibold text-stone-800">부친 {data.groom.father} 계좌</p>
-                            <p className="text-stone-400 text-[10px]">{data.groom.fatherBank} {data.groom.fatherAccount}</p>
-                          </div>
-                          <button 
-                            onClick={() => copyToClipboard(data.groom.fatherAccount, "신랑 부친 계좌")}
-                            className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 text-stone-600 rounded transition"
-                          >
-                            복사
-                          </button>
-                        </div>
-
-                        <div className="pt-2.5 border-t border-dashed border-stone-100 flex justify-between items-center">
-                          <div>
-                            <p className="font-semibold text-stone-800">모친 {data.groom.mother} 계좌</p>
-                            <p className="text-stone-400 text-[10px]">{data.groom.motherBank} {data.groom.motherAccount}</p>
-                          </div>
-                          <button 
-                            onClick={() => copyToClipboard(data.groom.motherAccount, "신랑 모친 계좌")}
-                            className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 text-stone-600 rounded transition"
-                          >
-                            복사
-                          </button>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -1458,32 +1640,6 @@ export default function App() {
                           </div>
                           <button 
                             onClick={() => copyToClipboard(data.bride.account, "신부측 계좌")}
-                            className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 text-stone-600 rounded transition"
-                          >
-                            복사
-                          </button>
-                        </div>
-
-                        <div className="pt-2.5 border-t border-dashed border-stone-100 flex justify-between items-center">
-                          <div>
-                            <p className="font-semibold text-stone-800">부친 {data.bride.father} 계좌</p>
-                            <p className="text-stone-400 text-[10px]">{data.bride.fatherBank} {data.bride.fatherAccount}</p>
-                          </div>
-                          <button 
-                            onClick={() => copyToClipboard(data.bride.fatherAccount, "신부 부친 계좌")}
-                            className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 text-stone-600 rounded transition"
-                          >
-                            복사
-                          </button>
-                        </div>
-
-                        <div className="pt-2.5 border-t border-dashed border-stone-100 flex justify-between items-center">
-                          <div>
-                            <p className="font-semibold text-stone-800">모친 {data.bride.mother} 계좌</p>
-                            <p className="text-stone-400 text-[10px]">{data.bride.motherBank} {data.bride.motherAccount}</p>
-                          </div>
-                          <button 
-                            onClick={() => copyToClipboard(data.bride.motherAccount, "신부 모친 계좌")}
                             className="px-2.5 py-1 text-[11px] bg-stone-100 hover:bg-stone-200 text-stone-600 rounded transition"
                           >
                             복사
@@ -1540,6 +1696,71 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </section>
+            );
+          }
+          
+          /* =========================================================================
+             GUESTBOOK SECTION
+             ========================================================================= */
+          if (sect.id === 'guestbook') {
+            return (
+              <section key={sect.id} className="px-6 py-16 bg-[#FAF6F2]/30 space-y-8 border-b border-stone-100/40">
+                <div className="text-center space-y-2">
+                  <h3 className="font-serif font-semibold text-lg text-[#9A7D6F] tracking-widest">
+                    방명록
+                  </h3>
+                  <p className="text-[10px] text-stone-400">따뜻한 축하의 한마디를 남겨주세요</p>
+                </div>
+
+                {/* 작성 폼 - 모든 방문자에게 열려있음 */}
+                <div className="bg-white p-4 rounded-2xl border border-stone-200/60 shadow-xs space-y-2.5 font-sans">
+                  <input 
+                    type="text" 
+                    value={guestbookName}
+                    onChange={(e) => setGuestbookName(e.target.value)}
+                    placeholder="성함을 입력해주세요"
+                    maxLength={20}
+                    className="w-full border border-stone-200 rounded-xl p-2.5 text-xs"
+                  />
+                  <textarea 
+                    value={guestbookMessage}
+                    onChange={(e) => setGuestbookMessage(e.target.value)}
+                    placeholder="축하 메시지를 남겨주세요"
+                    maxLength={200}
+                    className="w-full h-20 border border-stone-200 rounded-xl p-2.5 text-xs resize-none"
+                  />
+                  <button 
+                    onClick={submitGuestbookEntry}
+                    disabled={guestbookSubmitting}
+                    className="w-full py-2.5 bg-[#C5A059] hover:bg-[#B38F48] disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition"
+                  >
+                    {guestbookSubmitting ? "등록 중..." : "메시지 남기기"}
+                  </button>
+                </div>
+
+                {/* 방명록 목록 */}
+                <div className="space-y-3">
+                  {guestbookEntries.length === 0 ? (
+                    <p className="text-center text-xs text-stone-400 py-6">아직 남겨진 메시지가 없어요. 첫 번째 메시지를 남겨보세요!</p>
+                  ) : (
+                    guestbookEntries.map(entry => (
+                      <div key={entry.id} className="bg-white p-3.5 rounded-2xl border border-stone-100 shadow-xs relative">
+                        <p className="text-xs font-semibold text-[#9A7D6F] mb-1">{entry.name}</p>
+                        <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">{entry.message}</p>
+                        {editMode && (
+                          <button 
+                            onClick={() => deleteGuestbookEntry(entry.id)}
+                            className="absolute top-3 right-3 text-red-400 hover:text-red-600"
+                            title="삭제"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
               </section>
             );
           }
