@@ -966,9 +966,9 @@ export default function App() {
                   <img 
                     src={data.images.main} 
                     alt="Wedding Main Hero" 
-                    className="w-full h-full object-cover opacity-85 transition-transform duration-1000 transform hover:scale-105" 
+                    className="w-full h-full object-cover transition-transform duration-1000 transform hover:scale-105" 
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-white via-white/20 to-black/15"></div>
+                  <div className="absolute inset-0 bg-gradient-to-t from-white via-white/5 to-transparent"></div>
                 </div>
 
                 <div className="relative z-10 space-y-3.5">
