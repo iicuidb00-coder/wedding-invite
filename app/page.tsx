@@ -715,9 +715,14 @@ export default function App() {
     <div className={`min-h-screen ${getBackgroundClass()} text-stone-700 ${data.theme.fontFamily === 'serif' ? 'font-serif' : 'font-sans'} flex justify-center selection:bg-pink-100 selection:text-pink-600`}>
       
       {/* Dynamic Style Link Imports for Fonts */}
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Noto+Serif+KR:wght@300;400;600&family=Montserrat:wght@300;400;500&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel..." />
 
-      {/* Main Single-File Container */}
+      {isLoading ? (
+        <div className="w-full max-w-md flex flex-col items-center justify-center min-h-screen bg-white gap-4">
+          <div className="text-3xl animate-pulse">💍</div>
+          <p className="text-xs text-stone-400 font-sans tracking-widest">잠시만 기다려 주세요</p>
+        </div>
+      ) : (
       <main className="w-full max-w-md bg-white shadow-2xl relative flex flex-col min-h-screen overflow-x-hidden">
         
         {/* Floating Administrative Global Top Control Bar */}
@@ -1897,6 +1902,7 @@ export default function App() {
         )}
 
       </main>
+      )}{/* isLoading 삼항연산자 닫기 */}
     </div>
   );
 }
