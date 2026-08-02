@@ -412,7 +412,7 @@ export default function App() {
 
   // Synthesized Romantic Background Music
   const [isPlaying, setIsPlaying] = useState(false);
-  const [autoPlayTriggered, setAutoPlayTriggered] = useState(false);
+  const [bgmModalShown, setBgmModalShown] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const bgmIntervalRef = useRef<number | null>(null);
 
@@ -503,80 +503,6 @@ export default function App() {
      if (audioElRef.current) audioElRef.current.pause();
    };
  }, []);
- 
- // 첫 터치/클릭 시 BGM 자동 시작
- useEffect(() => {
-   if (isLoading) return;
-
-   let triggered = false;
-
-   const handleFirstInteraction = () => {
-     if (triggered) return;
-     triggered = true;
-     setAutoPlayTriggered(true);
-
-     // BGM 파일이 있으면 Audio 객체로 재생
-     if (data.audio?.bgmUrl) {
-       const audio = new Audio(data.audio.bgmUrl);
-       audio.loop = true;
-       audio.volume = 0.7;
-       audio.play().then(() => {
-         audioElRef.current = audio;
-         setIsPlaying(true);
-       }).catch((e) => {
-         console.error("BGM 재생 실패", e);
-       });
-     } else {
-       // BGM 파일 없으면 합성음 재생
-       try {
-         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-         audioCtxRef.current = ctx;
- 
-         const melody = [
-           293.66, 370.01, 440.00, 587.33,
-           220.00, 277.18, 329.63, 440.00,
-           246.94, 293.66, 392.00, 493.88,
-           164.81, 196.00, 246.94, 329.63,
-           174.61, 220.00, 261.63, 349.23,
-           196.00, 246.94, 293.66, 392.00,
-           220.00, 261.63, 329.63, 440.00,
-           293.66, 349.23, 440.00, 587.33
-         ];
-
-         let noteIdx = 0;
-         const intervalId = window.setInterval(() => {
-           const osc = ctx.createOscillator();
-           const gain = ctx.createGain();
-           osc.type = 'triangle';
-           osc.frequency.setValueAtTime(melody[noteIdx], ctx.currentTime);
-           gain.gain.setValueAtTime(0.09, ctx.currentTime);
-           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.4);
-           osc.connect(gain);
-           gain.connect(ctx.destination);
-           osc.start();
-           osc.stop(ctx.currentTime + 1.6);
-           noteIdx = (noteIdx + 1) % melody.length;
-         }, 400);
-
-         bgmIntervalRef.current = intervalId;
-         setIsPlaying(true);
-       } catch (e) {
-         console.error("합성음 재생 실패", e);
-       }
-     }
-
-     document.removeEventListener('click', handleFirstInteraction);
-     document.removeEventListener('touchstart', handleFirstInteraction);
-   };
-
-   document.addEventListener('click', handleFirstInteraction, { passive: true });
-   document.addEventListener('touchstart', handleFirstInteraction, { passive: true });
-
-   return () => {
-     document.removeEventListener('click', handleFirstInteraction);
-     document.removeEventListener('touchstart', handleFirstInteraction);
-   };
- }, [isLoading]);
 
  const toggleMusic = () => {
    if (isPlaying) {
@@ -790,12 +716,50 @@ export default function App() {
       {/* Dynamic Style Link Imports for Fonts */}
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel..." />
 
+      {/* BGM 선택 모달 */}
+      {!isLoading && !bgmModalShown && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl p-8 mx-6 text-center space-y-6 shadow-2xl max-w-sm w-full">
+            <div className="space-y-2">
+              <p className="text-2xl">💍</p>
+              <h2 className="font-serif text-lg font-semibold text-[#4A3E3D]">
+                강명균 ♥ 임결아
+              </h2>
+              <p className="text-xs text-stone-400 leading-relaxed">
+                청첩장과 함께<br/>배경음악을 재생할까요?
+              </p>
+            </div>
+
+            <div className="space-y-2.5">
+              <button
+                onClick={() => {
+                  setBgmModalShown(true);
+            toggleMusic();
+                }}
+                className="w-full py-3 bg-[#C5A059] hover:bg-[#B38F48] text-white text-sm font-semibold rounded-2xl transition flex items-center justify-center gap-2"
+              >
+                <Music size={15} />
+                음악과 함께 보기
+              </button>
+              <button
+                onClick={() => setBgmModalShown(true)}
+                className="w-full py-3 bg-stone-100 hover:bg-stone-200 text-stone-500 text-sm font-semibold rounded-2xl transition"
+        >
+                음악 없이 보기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="w-full max-w-md flex flex-col items-center justify-center min-h-screen bg-white gap-4">
           <div className="text-3xl animate-pulse">💍</div>
           <p className="text-xs text-stone-400 font-sans tracking-widest">잠시만 기다려 주세요</p>
         </div>
       ) : (
+
+        
       <main className="w-full max-w-md bg-white shadow-2xl relative flex flex-col min-h-screen overflow-x-hidden">
         
         {/* Floating Administrative Global Top Control Bar */}
