@@ -497,58 +497,31 @@ export default function App() {
   }, [data.date]);
 
  // BGM 관련 리소스 정리 (페이지 이동/언마운트 시)
-  useEffect(() => {
-    return () => {
-      if (bgmIntervalRef.current) clearInterval(bgmIntervalRef.current);
-      if (audioElRef.current) audioElRef.current.pause();
-    };
-  }, []);
-  
-  useEffect(() => {
-    if (isLoading) return;
-    const handleFirstInteraction = () => {
-      if (autoPlayTriggered) return;
-      setAutoPlayTriggered(true);
-      toggleMusic();
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
-    document.addEventListener('click', handleFirstInteraction);
-    document.addEventListener('touchstart', handleFirstInteraction);
-    return () => {
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
-  }, [isLoading, autoPlayTriggered]);
+ useEffect(() => {
+   return () => {
+     if (bgmIntervalRef.current) clearInterval(bgmIntervalRef.current);
+     if (audioElRef.current) audioElRef.current.pause();
+   };
+ }, []);
+ 
+ // 첫 터치/클릭 시 BGM 자동 시작
+ useEffect(() => {
+   if (isLoading || autoPlayTriggered) return;
 
-  const toggleMusic = () => {
-    if (isPlaying) {
-       if (audioElRef.current) audioElRef.current.pause();
-       if (bgmIntervalRef.current) clearInterval(bgmIntervalRef.current);
-       setIsPlaying(false);
-       return;
-     }
-
-     // 업로드한 BGM 파일이 있으면 그걸 재생
-     if (data.audio.bgmUrl) {
-       if (!audioElRef.current) {
-         audioElRef.current = new Audio(data.audio.bgmUrl);
-         audioElRef.current.loop = true;
-       } else {
-         audioElRef.current.src = data.audio.bgmUrl;
-       }
-       audioElRef.current.play();
+   const handleFirstInteraction = () => {
+     setAutoPlayTriggered(true);
+ 
+     if (data.audio?.bgmUrl) {
+       const audio = new Audio(data.audio.bgmUrl);
+       audio.loop = true;
+       audio.play().catch(() => {});
+       audioElRef.current = audio;
        setIsPlaying(true);
-       showToast("업로드하신 배경음악이 재생됩니다 🎵");
        return;
      }
 
-     // 업로드한 파일이 없으면 기존 합성음 재생 (기존 코드 그대로)
-     if (!audioCtxRef.current) {
-       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-     }
-     const ctx = audioCtxRef.current;
-     if (ctx.state === 'suspended') ctx.resume();
+     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+     audioCtxRef.current = ctx;
 
      const melody = [
        293.66, 370.01, 440.00, 587.33,
@@ -560,7 +533,7 @@ export default function App() {
        220.00, 261.63, 329.63, 440.00,
        293.66, 349.23, 440.00, 587.33
      ];
-  
+
      let noteIdx = 0;
      const intervalId = window.setInterval(() => {
        const osc = ctx.createOscillator();
@@ -578,9 +551,78 @@ export default function App() {
 
      bgmIntervalRef.current = intervalId;
      setIsPlaying(true);
-     showToast("감미로운 어쿠스틱 오케스트라 연주가 시작되었습니다 🎻");
+
+     document.removeEventListener('click', handleFirstInteraction);
+     document.removeEventListener('touchstart', handleFirstInteraction);
    };
 
+   document.addEventListener('click', handleFirstInteraction);
+   document.addEventListener('touchstart', handleFirstInteraction);
+
+   return () => {
+     document.removeEventListener('click', handleFirstInteraction);
+     document.removeEventListener('touchstart', handleFirstInteraction);
+   };
+ }, [isLoading, autoPlayTriggered, data.audio?.bgmUrl]);
+
+ const toggleMusic = () => {
+   if (isPlaying) {
+     if (audioElRef.current) audioElRef.current.pause();
+     if (bgmIntervalRef.current) clearInterval(bgmIntervalRef.current);
+     setIsPlaying(false);
+     return;
+   }
+
+   if (data.audio?.bgmUrl) {
+     if (!audioElRef.current) {
+       audioElRef.current = new Audio(data.audio.bgmUrl);
+       audioElRef.current.loop = true;
+     } else {
+       audioElRef.current.src = data.audio.bgmUrl;
+     }
+     audioElRef.current.play();
+     setIsPlaying(true);
+     showToast("업로드하신 배경음악이 재생됩니다 🎵");
+     return;
+   }
+
+   if (!audioCtxRef.current) {
+     audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+   }
+   const ctx = audioCtxRef.current;
+   if (ctx.state === 'suspended') ctx.resume();
+
+   const melody = [
+     293.66, 370.01, 440.00, 587.33,
+     220.00, 277.18, 329.63, 440.00,
+     246.94, 293.66, 392.00, 493.88,
+     164.81, 196.00, 246.94, 329.63,
+     174.61, 220.00, 261.63, 349.23,
+     196.00, 246.94, 293.66, 392.00,
+     220.00, 261.63, 329.63, 440.00,
+     293.66, 349.23, 440.00, 587.33
+   ];
+
+   let noteIdx = 0;
+   const intervalId = window.setInterval(() => {
+     const osc = ctx.createOscillator();
+     const gain = ctx.createGain();
+     osc.type = 'triangle';
+     osc.frequency.setValueAtTime(melody[noteIdx], ctx.currentTime);
+     gain.gain.setValueAtTime(0.09, ctx.currentTime);
+     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.4);
+     osc.connect(gain);
+     gain.connect(ctx.destination);
+     osc.start();
+     osc.stop(ctx.currentTime + 1.6);
+     noteIdx = (noteIdx + 1) % melody.length;
+   }, 400);
+
+   bgmIntervalRef.current = intervalId;
+   setIsPlaying(true);
+   showToast("감미로운 어쿠스틱 오케스트라 연주가 시작되었습니다 🎻");
+ };
+ 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
