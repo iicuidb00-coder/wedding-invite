@@ -412,6 +412,7 @@ export default function App() {
 
   // Synthesized Romantic Background Music
   const [isPlaying, setIsPlaying] = useState(false);
+  const [autoPlayTriggered, setAutoPlayTriggered] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const bgmIntervalRef = useRef<number | null>(null);
 
@@ -502,6 +503,23 @@ export default function App() {
       if (audioElRef.current) audioElRef.current.pause();
     };
   }, []);
+  
+  useEffect(() => {
+    if (isLoading) return;
+    const handleFirstInteraction = () => {
+      if (autoPlayTriggered) return;
+      setAutoPlayTriggered(true);
+      toggleMusic();
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('touchstart', handleFirstInteraction);
+    };
+    document.addEventListener('click', handleFirstInteraction);
+    document.addEventListener('touchstart', handleFirstInteraction);
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('touchstart', handleFirstInteraction);
+    };
+  }, [isLoading, autoPlayTriggered]);
 
   const toggleMusic = () => {
     if (isPlaying) {
