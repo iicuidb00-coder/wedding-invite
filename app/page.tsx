@@ -723,7 +723,7 @@ export default function App() {
             <div className="space-y-2">
               <p className="text-2xl">💍</p>
               <h2 className="font-serif text-lg font-semibold text-[#4A3E3D]">
-                강명균 ♥ 임결아
+                명균 ♥ 결아
               </h2>
               <p className="text-xs text-stone-400 leading-relaxed">
                 청첩장과 함께<br/>배경음악을 재생할까요?
