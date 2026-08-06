@@ -13,10 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "강명균 ♥ 임결아 결혼합니다",
-  description: "10월 18일, 저희 두 사람의 새로운 시작에 함께해 주세요.",
+ 
+  description: "10월 3일, 저희 두 사람의 새로운 시작에 함께해 주세요.",
   openGraph: {
-    title: "강명균 ♥ 임결아 결혼합니다",
+    title: "명균 ♥ 결아 결혼합니다💍",
     description: "10월 3일, 저희 두 사람의 새로운 시작에 함께해 주세요.",
     images: [
       {
